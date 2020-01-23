@@ -146,8 +146,7 @@ BluetoothSerial SerialBT;
 // Globale Bool-Varibale für den Bremszustand
 volatile uint32_t breaking = 0;
 
-// Globale Variabeln für die Drehzahlmessung
-volatile uint32_t lastTime = micros();
+// Globale Variabe für die Drehzahlmessung
 volatile uint32_t currentRPM = 0;
 
 // Anlegen einer Instanz des Timer Objrekts für den Timer-Interrupt
@@ -272,10 +271,15 @@ void IRAM_ATTR detectBreaking() {
 // und in der Variable "currentRPM" gespeichet.
 void IRAM_ATTR hallInterrupt() {
     uint32_t currentTime = micros();
-    portENTER_CRITICAL(&timerMux);
-    currentRPM = currentTime - lastTime;
-    portEXIT_CRITICAL(&timerMux);
-    lastTime = currentTime;
+    static bool firstCall = 1;
+    if (firstCall) {
+        static uint32_t lastTime = currentTime;
+        firstCall = 0;
+    } else {
+        portENTER_CRITICAL(&timerMux);
+        currentRPM = currentTime - lastTime;
+        portEXIT_CRITICAL(&timerMux);
+        lastTime = currentTime;
 }
 /***********************************************************/
 /********************** FUNKTIONEN *************************/
