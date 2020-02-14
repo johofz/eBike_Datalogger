@@ -44,23 +44,23 @@ class MainApplication:
         self.bytesize = serial.EIGHTBITS
         self.timeout = None
         self.interval = 50
-        self.xcount = 50
+        self.xcount = 1000
 
         self.dt = np.dtype([
-            ('GPS Breitengrad', np.float64), ('GPS Längengrad', np.float64), ('GPS Höhe ü.n.N.', np.float32), ('GPS Geschwindigkeit', np.float32),
+            ('GPS Breitengrad', np.float64), ('GPS Längengrad', np.float64), ('GPS Höhe (m)', np.float32), ('GPS Geschw. (km/h)', np.float32),
             ('GPS Jahr', np.uint16), ('GPS Monat', np.uint8), ('GPS Tag', np.uint8),
             ('GPS Stunde', np.uint8), ('GPS Minunte', np.uint8), ('GPS Sekunde', np.uint8),
             ('GPS Satelliten', np.uint8),
-            ('Belagtemp. Vorne', np.float64), ('Umgebungstemp.', np.float64),
+            ('Scheibentemp. Vorne (°C)', np.float64), ('Belagtemp. Vorne (°C)', np.float64), ('Umgebungstemp 1 (°C)', np.float64), ('Umgebungstemp 2 (°C)', np.float64),
             ('CanId0x101', np.uint64),
             ('Zeitstempel', np.uint32),
-            ('Bremsdruck Vorne', np.uint16), ('Bremsdruck Hinten', np.uint16),
-            ('Raddrehzahl Vorne', np.uint32),
+            ('Bremsdruck Vorne (bar)', np.uint16), ('Bremsdruck Hinten (bar)', np.uint16),
+            ('Raddrehzahl Vorne (1/min)', np.uint32),
             ('Bremsstatus', np.uint8)
             ], align=True)
 
         self.data = pd.DataFrame([])
-        self.default_columns = ['Bremsdruck Vorne', 'Raddrehzahl Vorne', 'Belagtemp. Vorne']
+        self.default_columns = ['Bremsdruck Vorne (bar)', 'Raddrehzahl Vorne (1/min)', 'Belagtemp. Vorne (°C)']
 
         self.parent.geometry("1200x800+50+50")
         self.parent.minsize(1200, 800)
@@ -269,9 +269,9 @@ class MainApplication:
             if '0x101' in can_msg:
                 msg_content = {
                     'Ladestatus': [[-3, -1], [-5, -3]],
-                    'Batteriestrom': [[-7, -5], [-9, -7]],
-                    'Batterieleistung': [[-11, -9], [-13, -11]],
-                    'Batteriespannung': [[-15, -13], [-17, -15]],
+                    'Batteriestrom (mA)': [[-7, -5], [-9, -7]],
+                    'Batterieleistung (W * 1/10)': [[-11, -9], [-13, -11]],
+                    'Batteriespannung (V)': [[-15, -13], [-17, -15]],
                     }
                 for key in msg_content:
                     index = msg_content.get(key)
@@ -290,9 +290,11 @@ class MainApplication:
         circumference = 2 * np.pi * radius
         total_flanks = 84
 
-        df['Bremsdruck Vorne'] = df['Bremsdruck Vorne'] * pressure_rate * 3.3 / 4095
-        df['Bremsdruck Hinten'] = df['Bremsdruck Hinten'] * pressure_rate * 3.3 / 4095
-        df['Raddrehzahl Vorne'] = 1e6 / (df['Raddrehzahl Vorne'] * total_flanks) * circumference * 3.6
+        df['Bremsdruck Vorne (bar)'] = df['Bremsdruck Vorne (bar)'] * pressure_rate * 3.3 / 4095
+        df['Bremsdruck Hinten (bar)'] = df['Bremsdruck Hinten (bar)'] * pressure_rate * 3.3 / 4095
+        df['Raddrehzahl Vorne (1/min)'] = 1e6 / (df['Raddrehzahl Vorne (1/min)'] * total_flanks)
+        df['Batteriespannung (V)'] = df['Batteriespannung (V)'] / 1000
+
 
         return df
 
