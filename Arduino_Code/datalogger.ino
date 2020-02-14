@@ -17,7 +17,6 @@ const int pressurePinFront = 39;    // Druck-Sensor vorne
 const int pressurePinBack = 36;     // Druck-Sensor hinten
 const int breakPin = 25;            // Bremshebel vorne/hinten
 const int canChipSelect = 13;       // CAN SPI Chip-Select
-const int canIntPin = 27;           // CAN Interrupt
 const int gpsRxPin = 16;            // GPS RX für Hardware-Serial
 const int gpsTxPin = 17;            // GPS TX für Hardware-Serial
 const int sdChipSelect = 32;        // SD SPI Chip-Select
@@ -67,21 +66,25 @@ struct gpsDataStruct_t {
     uint8_t         gpsMin;       //  1 byte |
     uint8_t         gpsSec;       //  1 byte |
     uint8_t         gpsSat;       //  1 byte GPS Satelliten-Verbindungen
-} gpsData                         // 32 byte
+} gpsData;                         // 32 byte
 
 // Anlegen einer Objekt-Instanz für den MAX31855 Temp.-Sensor.
 // Kommunikation mit ESP32 über SPI-Schnittstelle.
 // Die Messung erfolgt mittels Thermoelementen.
 
-#define MAXCS   5
-Adafruit_MAX31855 thermocouple(MAXCS);
+#define MAXCS_DISC   26
+#define MAXCS_LINING 27
+Adafruit_MAX31855 thermocoupleDisc(MAXCS_DISC);
+Adafruit_MAX31855 thermocoupleLining(MAXCS_LINING);
 
 // Daten-Struct für die Temperaturmessung.
 
 struct tmpDataStruct_t {
-    double          tmpFront;     //  8 byte
-    double          tmpAmb;       //  8 byte
-} tmpData;                        // 16 byte
+    double          tmpFrontDisc;     //  8 byte
+    double          tmpFrontLining;   //  8 byte
+    double          tmpAmbDisc;          //  8 byte
+    double          tmpAmbLining;          //  8 byte
+} tmpData;                            // 32 byte
 
 // Das CAN-Signal wird zusammen mit der Spannungsversorgung von der Leitung zwischen Motor und Tacho abgegriffen.
 // Hierfür wurde aus MCP2515 und TJA1050 ein einfacher CAN-Sniffer auf der Platine platziert,
@@ -104,7 +107,7 @@ struct canDataStruct_t {
 
 struct logDataStruct_t {
     gpsDataStruct_t gpsLogData;     // 32 byte
-    tmpDataStruct_t tmpLogData;     // 16 byte
+    tmpDataStruct_t tmpLogData;     // 32 byte
     canDataStruct_t canLogData;     //  8 byte
     uint32_t        tstmp;          //  4 byte
     uint16_t        presFront;      //  2 byte
@@ -113,7 +116,7 @@ struct logDataStruct_t {
     uint8_t         logBreak;       //  1 byte
                                     //  3 byte padding
                                     //--------
-                                    // 72 byte   
+                                    // 88 byte   
 } logData;
 
 // Um die Datenmenge schnell genug auf die SD-Karte schreiben zu können, werden die einzelnen logData-Structs
@@ -272,14 +275,16 @@ void IRAM_ATTR detectBreaking() {
 void IRAM_ATTR hallInterrupt() {
     uint32_t currentTime = micros();
     static bool firstCall = 1;
+    static uint32_t lastTime;
     if (firstCall) {
-        static uint32_t lastTime = currentTime;
+        lastTime = currentTime;
         firstCall = 0;
     } else {
         portENTER_CRITICAL(&timerMux);
         currentRPM = currentTime - lastTime;
         portEXIT_CRITICAL(&timerMux);
         lastTime = currentTime;
+    }
 }
 /***********************************************************/
 /********************** FUNKTIONEN *************************/
@@ -293,7 +298,8 @@ void createNewLogFile() {
     uint32_t gpsEncodeTimer = millis();
     uint32_t yellowLedTimer = millis();
     double startGpsTimeSignal = millis();
-    uint32_t timeout = 600000; // 10 min in ms
+    uint32_t timeout = 10000; // 10 sek in ms (für Tests)
+    // uint32_t timeout = 600000; // 10 min in ms
 
     // Im Folgenden wird auf den Zeitstempel des GPS gewartet. Dieser wird für die Erstellung der Log-Datei verwendet.
     // Nach einem Timeout von 10min (Variable "timeout") wird ein Dateiname mit fortlaufender Nummer (XXXX.BIN)
@@ -313,7 +319,7 @@ void createNewLogFile() {
                 ledDelay = 1000;
             } else {
                 ledDelay = 100;
-            } 
+            }
             yellowLedTimer = millis() + ledDelay;
             yellowLedState = !yellowLedState;
             digitalWrite(yellowLED, yellowLedState);   
@@ -477,13 +483,23 @@ void getGpsData() {
 
 // Temperatur-Werte werden vom Thermomodul abgerufen und im tmpData-Struct abgelegt.
 void getTmpData() {
-    double c = thermocouple.readCelsius();
+
+    double c = thermocoupleDisc.readCelsius();
     if (isnan(c)){
-        tmpData.tmpFront = 0.0;
+        tmpData.tmpFrontDisc = 0.0;
     } else {
-        tmpData.tmpFront = c;
+        tmpData.tmpFrontDisc = c;
     }
-    tmpData.tmpAmb = thermocouple.readInternal();
+    
+    c = thermocoupleLining.readCelsius();
+    if (isnan(c)){
+        tmpData.tmpFrontLining = 0.0;
+    } else {
+        tmpData.tmpFrontLining = c;
+    }
+
+    tmpData.tmpAmbDisc = thermocoupleDisc.readInternal();
+    tmpData.tmpAmbLining = thermocoupleLining.readInternal();
 }
 
 // Can-Buffer wird ausgelesen und nach den gesuchten IDs mit Logik gefiltert.
@@ -594,7 +610,8 @@ void setup() {
 
 void loop() {
     static double startTimestamp;
-    static double gpsTmpTimer = millis();
+    static double gpsTimer = millis();
+    static double tmpTimer = millis();
     static double canTimer = millis();
     static double btSerialTimer = millis();
     static bool yellowLedState = 0;
@@ -602,10 +619,15 @@ void loop() {
     static uint16_t yellowLedDelay;
     static uint8_t yellowLedCounter = 0;
     
-    // GPS und Temperatur-Abfrage alle 200ms
-    if (millis() > gpsTmpTimer) {
-        gpsTmpTimer = millis() + 200;
+    // GPS-Abfrage alle 200ms
+    if (millis() > gpsTimer) {
+        gpsTimer = millis() + 200;
         getGpsData();
+    }
+
+    // Temperatur-Abfrage alle 200ms
+    if (millis() > tmpTimer) {
+        tmpTimer = millis() + 200;
         getTmpData();
     }
     
@@ -634,21 +656,12 @@ void loop() {
         Serial.print("Buffer 2 geschrieben: ");
         Serial.println(millis() - startTimestamp);
     }
-
-    // Die gelbe Status Led soll    
-    if (gpsData.gpsSat == 0) {
-        yellowLedState = 1;
-        digitalWrite(yellowLED, yellowLedState);
-    } else if (millis() > yellowLedTimer) {
-        if (yellowLedCounter % (gpsData.gpsSat * 2) == 0) {
-            yellowLedDelay = 10000;
-        } else {
-            yellowLedDelay = 1000;
-        }
-        yellowLedTimer = millis() + yellowLedDelay;
-        yellowLedState = !yellowLedState;
-        digitalWrite(yellowLED, yellowLedState);   
-    }
+    
+    if (gps.location.isValid()) {
+        yellowLedState = 1;   
+    } else {
+        yellowLedState = 0;
+    } digitalWrite(yellowLED, yellowLedState);
     
     // Bluetooth-Kommunikaton alle 100ms.
     // Der Aktuelle Datensatz wird via Serial-Bluetooth zum PC oder Handy übermittelt.
