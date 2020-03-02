@@ -9,7 +9,7 @@ import pandas as pd
 import os
 
 import serial
-import serial.tools.list_ports
+import serial.tools.list_ports as list_com_ports
 from serial.serialutil import SerialException
 
 import matplotlib
@@ -20,7 +20,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 
 
-class MainApplication:
+class DataloggerGUI:
 
     def __init__(self, parent):
         self.parent = parent
@@ -31,6 +31,8 @@ class MainApplication:
         _ana1color = '#d9d9d9' # X11 color: 'gray85'
         _ana2color = '#ececec' # Closest X11 color: 'gray92'
 
+        # Styles aktivieren durch ein-/auskommentieren
+
         style.use('bmh')
         # style.use('ggplot')
         # style.use('fivethirtyeight')
@@ -40,35 +42,32 @@ class MainApplication:
 
         self.available_ports = []
         self.current_port = None
-        self.baudrate = 115200
+        self.baudrate = 115200              # Baudrate des ESP32
         self.bytesize = serial.EIGHTBITS
         self.timeout = None
-        self.interval = 50
-        self.xcount = 1000
+        self.interval = 50                  # Refresh-Rate des Live-Loggings (sollte mit Bluetooth-Serial-Rate des ESP32 übereinstimmen)
+        self.xcount = 100                   # maximale Anzahl der dargestellten Datenpunkte bei Live-Logging
 
-        self.dt = np.dtype([
-            ('GPS Breitengrad', np.float64), ('GPS Längengrad', np.float64), ('GPS Höhe (m)', np.float32), ('GPS Geschw. (km/h)', np.float32),
-            ('GPS Jahr', np.uint16), ('GPS Monat', np.uint8), ('GPS Tag', np.uint8),
-            ('GPS Stunde', np.uint8), ('GPS Minunte', np.uint8), ('GPS Sekunde', np.uint8),
-            ('GPS Satelliten', np.uint8),
-            ('Scheibentemp. Vorne (°C)', np.float64), ('Belagtemp. Vorne (°C)', np.float64), ('Umgebungstemp 1 (°C)', np.float64), ('Umgebungstemp 2 (°C)', np.float64),
-            ('CanId0x101', np.uint64),
-            ('Zeitstempel', np.uint32),
-            ('Bremsdruck Vorne (bar)', np.uint16), ('Bremsdruck Hinten (bar)', np.uint16),
-            ('Raddrehzahl Vorne (1/min)', np.uint32),
-            ('Bremsstatus', np.uint8)
-            ], align=True)
+        # Im Folgenden wird der Datentyp für die Konvertierung festgelegt. Dieser wird aus der datenstrultur.csv gebildet und MUSS mit 
+        # der Datenstruktur des ESP32 identisch sein.
+        self.dt = self.get_data_type()
 
         self.data = pd.DataFrame([])
-        self.default_columns = ['Bremsdruck Vorne (bar)', 'Raddrehzahl Vorne (1/min)', 'Belagtemp. Vorne (°C)']
 
-        self.parent.geometry("1200x800+50+50")
-        self.parent.minsize(1200, 800)
-        self.parent.maxsize(3004, 1959)
+        # Folgede Liste legt die Startansicht fest. (Kann nach Bedarf geändert werden, die Strings müssen dabei übereinstimmen.)
+        self.default_columns = ['Bremsdruck Vorne (bar)', 'Raddrehzahl Vorne (1/min)', 'Belagtemp. Vorne (°C)']
+        # self.default_columns = ['Scheibentemp. Vorne (°C)', 'Belagtemp. Vorne (°C)', 'Umgebungstemp 1 (°C)', 'Umgebungstemp 2 (°C)']
+
+        self.parent.geometry("1200x800+50+50")  # legt die Größe und Position beim Erzeugen des Fensters fest.
+        self.parent.minsize(1200, 800)  # minimale Größe des Fensters (darunter nicht sinnvoll, da sonst die Darstellung nicht gut scaled)
+        self.parent.maxsize(3004, 1959) # maximale Größe                             
         self.parent.resizable(1, 1)
         self.parent.title("Parser GUI")
-        tk.Tk.iconbitmap(self.parent, default='static/logo.ico')
+        tk.Tk.iconbitmap(self.parent, default='static/logo.ico') # Für anderes Logo die logo.ico Datei ersetzen. (muss ICO sein)
         self.parent.configure(background=_bgcolor)
+
+        # Der Folgende Teil legt das Erscheinungsbild des GUI fest. Änderungen sind nicht empfohlen.
+        # Wenn doch eine neue Funktion hinzukommen soll, sollte diese bestenfalls über ein Kaskardenmenü implementiert werden.
 
         ###################################################
         ################# Plot - Optionen #################
@@ -92,7 +91,11 @@ class MainApplication:
 
         self.load_bin_button = ttk.Button(self.conversion)
         self.load_bin_button.place(relx=0.25, rely=0.025)
-        self.load_bin_button.configure(text='von BIN laden', command=lambda: self.load_bin())
+        self.load_bin_button.configure(text='von BIN laden', command=lambda: self.load_bin(repair=False))
+
+        self.repair_bin_button = ttk.Button(self.conversion)
+        self.repair_bin_button.place(relx=0.5, rely=0.025)
+        self.repair_bin_button.configure(text='BIN reparieren', command=lambda: self.load_bin(repair=True))
 
         self.save_csv_button = ttk.Button(self.conversion)
         self.save_csv_button.place(relx=0.74, rely=0.025)
@@ -111,8 +114,12 @@ class MainApplication:
         self.start_button.configure(state='disabled', text='Start', command=lambda: self.start_live_logging())
 
         self.stop_button = ttk.Button(self.live_logging)
-        self.stop_button.place(relx=0.225, rely=0.025)
+        self.stop_button.place(relx=0.2, rely=0.025)
         self.stop_button.configure(state='disabled', text='Stop', command=lambda: self.stop_live_logging())
+
+        self.reset_button = ttk.Button(self.live_logging)
+        self.reset_button.place(relx=0.39, rely=0.025)
+        self.reset_button.configure(state='disabled', text='Reset', command=lambda: self.reset_live_logging())
 
         self.connect_button = ttk.Button(self.live_logging)
         self.connect_button.place(relx=0.62, rely=0.025)
@@ -135,7 +142,37 @@ class MainApplication:
         self.canvas._tkcanvas.place(relx=0, rely=0, relheight=1, relwidth=1)
 
 
+    # Ab hier beginnen die Methoden der DatenloggerGUI-Klasse. Diese stellen quasi das Backend dar und regeln den 
+    # Ablauf der App. Hier nur Änderungen an den vorgesehenen Stellen vornehmen! (Siehe Dokumentation)
+    # Bei Fragen gerne eine Mail an johannes.hoefler@outlook.com
+
+    def get_data_type(self):
+        '''Liest die vorgegebene Datenstruktur ein. Bei Änderungen müssen diese in der Excel-Liste analog übernommen werden.'''
+
+        dtype_map = {
+            'float64'   : np.float64,
+            'float32'   : np.float32,
+            'uint64'    : np.uint64,
+            'uint32'    : np.uint32,
+            'uint16'    : np.uint16,
+            'uint8'     : np.uint8,
+        }
+        csv = pd.read_csv('static/datenstruktur.csv', sep=';', encoding = 'ISO-8859-1')
+        
+        data_types = []
+        for _, row in csv.iterrows():
+            name = row['name']
+            dtype = dtype_map.get(row['datatyp'], None)
+            data_types.append((name, dtype))
+        
+        dt = np.dtype(data_types, align=True)
+
+        return dt
+
+
     def load_csv(self):
+        '''Ermöglicht das plotten von CSV-Files, welche zuvor aus BIN-Files erzeugt wurden'''
+        
         csv_file_types = (('csv Dateien', '*.csv'), ('alle Dateien', '*.*'))
         filepath = askopenfilename(filetypes=csv_file_types)
         if filepath:
@@ -151,7 +188,10 @@ class MainApplication:
             else: messagebox.showinfo('Achtung!', 'Dateiendung muss ".csv" sein!')
 
 
-    def load_bin(self):
+    def load_bin(self, repair):
+        '''BIN-Files, welche vom Datenlogger erzeugt wurden, werden automatisch konvertiert
+        und anschließend geplottet'''
+
         bin_file_types = ("bin Dateien","*.bin, *.BIN"),("alle Dateien","*.*")
         filepath = askopenfilename(filetypes=(bin_file_types))
         if filepath:
@@ -159,7 +199,11 @@ class MainApplication:
                 self.current_file = os.path.basename(filepath)
 
                 df = pd.DataFrame(np.fromfile(filepath, dtype=self.dt))
+                if repair:
+                    df = self.repair_file(df)
+
                 df.set_index(['Zeitstempel'], 1, inplace=True)
+
                 df = self.convert_can_msg(df)
                 self.data = self.format_data(df)
 
@@ -169,10 +213,33 @@ class MainApplication:
                 self.save_csv_button.configure(state='enabled')
             else: messagebox.showinfo('Achtung!', 'Dateiendung muss ".bin" oder ".BIN" sein!')
 
+    
+    def repair_file(self, df):
+        '''Ermöglicht die Reparatur von beschädigten BIN-Dateien. Plausibilisierung anhand des Zeitstempels'''
+
+        broken_rows = []
+
+        for i, row in df.iterrows():
+            try:
+                delta_t = row['Zeitstempel'][i+1] - row['Zeitstempel'][i]
+                if delta_t > 500 or delta_t < 0:
+                    broken_rows.append(i)
+            except IndexError:
+                pass
+
+        if broken_rows:
+            df.drop(df.index[broken_rows], inplace=True)
+
+        return df
+
 
     def save_csv(self):
+        '''Geladene BIN-Files (oder CSV-Files) werden ins CSV-Format knovertiert und können somit
+        auch von anderen Programmen (Excel, Matlab...) gelesen werden'''
+
         csv_file_types = (('csv Dateien', '*.csv'), ('alle Dateien', '*.*'))
         filepath = asksaveasfilename(filetypes=csv_file_types)
+
         if filepath:
             if filepath.endswith('.csv'):
                 self.data.to_csv(filepath, sep=';', decimal=',')
@@ -181,28 +248,44 @@ class MainApplication:
 
 
     def connect_to_port(self):
+        '''Ermöglicht die Verbindung zum Datenlogger, wenn dieser zuvor mit der Bluetooth-Schnittstelle
+        des PCs verbunden wurde. Das Suchen nach verfügbaren Ports kann ein paar Sekunden in Anspruch nehmen.'''
 
-        self.available_ports = [comport.device for comport in serial.tools.list_ports.comports()]
+        self.available_ports = [comport.device for comport in list_com_ports.comports()]
 
         dialog = tk.Toplevel(self.parent)
         dialog.resizable(0, 0)
 
+        label_frame = tk.Frame(dialog)
+        label_frame.grid(row=0, column=0, sticky='nsew')
+        label = ttk.Label(label_frame, text='Auswahl COM-Port:')
+        label.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
+
         radio_frame = tk.Frame(dialog)
-        radio_frame.grid(row=0, column=0, sticky='nsew')
+        radio_frame.grid(row=1, column=0, sticky='nsew')
 
         self.radio_variable = tk.IntVar()
         self.radio_variable.set(0)
         for i, port in enumerate(self.available_ports):
             radio_button = tk.Radiobutton(radio_frame, text=port, variable=self.radio_variable, value=i)
-            radio_button.grid(row=i+1, column=0, sticky='nsew', padx=10, pady=1)
+            radio_button.grid(row=i+1, column=0, sticky='nsew', padx=5, pady=1)
         
         button_frame = tk.Frame(dialog)
         button_frame.grid(row=2, column=0, sticky='nsew')
         confirm_Button = ttk.Button(button_frame, text='Bestätigen', command=lambda: self.update_port(dialog))
-        confirm_Button.grid(row=0, column=0, sticky='nsew')
+        confirm_Button.grid(row=0, column=0, sticky='nsew', padx=15, pady=5)
+        cancle_Button = ttk.Button(button_frame, text='Abbrechen', command=lambda: dialog.destroy())
+        cancle_Button.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
+
+        label_frame2 = tk.Frame(dialog)
+        label_frame2.grid(row=3, column=0, sticky='nsew')
+        label = ttk.Label(label_frame2, text='Datenlogger muss zuvor per Bluetooth\nmit PC verbunden werden!')
+        label.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
 
 
     def update_port(self, parent):
+        '''gehört zur Funktionalität von connect_to_port'''
+
         parent.destroy()
         self.current_port = self.available_ports[self.radio_variable.get()]
         if self.current_port:
@@ -210,6 +293,9 @@ class MainApplication:
 
 
     def start_live_logging(self):
+        '''Verfügbar nachdem mit COM-Port verbunden wurde. Verbindung zu gewähltem COM-Port 
+        wird hergestellt und der read_serial-Loop wird initiiert.'''
+
         try:
             self.esp32 = serial.Serial(port=self.current_port,
                                     baudrate=self.baudrate,
@@ -218,22 +304,36 @@ class MainApplication:
             
             self.start_button.configure(state='disabled')
             self.stop_button.configure(state='enabled')
+            self.reset_button.configure(state='enabled')
 
             self.after_process = self.parent.after(ms=self.interval, func=lambda: self.read_serial())
         except SerialException:
             messagebox.showerror('Fehler!', f'{self.current_port} konnte nicht geöffnet werden!\nZeitlimit überschritten.')
 
-        
 
     def stop_live_logging(self):
+        ''''Beendet die Live-Logging Messung. Der read_serial-Loop wird gestoppt und die Verbindung
+        zum COM-Port geschlossen.'''
+
         self.stop_button.configure(state='disabled')
         self.start_button.configure(state='enabled')
+        self.reset_button.configure(state='disabled')
 
         self.parent.after_cancel(self.after_process)
         self.esp32.close()
 
 
+    def reset_live_logging(self):
+        '''Resettet den Live-Logging-Datensatz und löscht die bisher geschriebenen Daten.'''
+
+        if hasattr(self, 'live_data'):
+            self.live_data = self.live_data[0:0]
+
+
     def read_serial(self):
+        '''Kern des Live-Loggings. Liest die vom Datenlogger via Serial-BT geschickten Datensätze und konvertiert diese
+        Zeile für Zeile analog zur load_bin Funktion. Der Graph wird bei jedem Durchlauf geplottet'''
+
         if self.esp32.in_waiting:
             incomming_line = self.esp32.read(self.esp32.in_waiting)
             df = pd.DataFrame(np.frombuffer(incomming_line, dtype=self.dt), columns=self.dt.names)
@@ -253,48 +353,63 @@ class MainApplication:
 
 
     def convert_can_msg(self, df):
-        can_msg_list = [can_msg for can_msg in list(df) if 'CanId' in can_msg]
+        '''Convertiert die CAN-Nachrichten. Neue CAN-IDs müssen hier analog zur ID 0x101 hinzugefügt werden.
+        Für detailierte Informationen lohnt ein Blick in die Dokumentation.'''
+
+        can_msg_list = [can_msg for can_msg in list(df) if 'CanId' in can_msg]  # Identifizierung der CAN-IDs aus dem logData-Struct
+        # Unbedingt die Nomenklatur beachten! Die CAN-Nachrichten, welche maximal 8 byte lang sind werden als uint64-Integer 
+        # interpretiert, und anschließend in Hex-Strings umgewandelt. Dies ermöglicht die schnellste und universellste Konvertierung
+        # unabhängig von der Läng der IDs. Einziger Nachteil ist, dass die Reihenfolge der Bytes umgedreht wird. Dies ist zu beachten!
+
+        can_msg_length = 18
 
         for can_msg in can_msg_list:
-            can_msg_length = 18
-            hex_list = [hex(val) for val in df[can_msg]]
-
+            hex_list = [hex(val) for val in df[can_msg]] # Konvertieren aller Einträge in Hex-Strings
+            [print(hex_list[i]) for i in range(10)]
             for idx, hex_str in enumerate(hex_list):
-                # hex-strings einheitlich auffüllen
+                # Hex-Strings einheitlich auffüllen
                 while len(hex_str) < can_msg_length:
                     hex_str = '0x' + '0' + hex_str.split('x')[1]
                 hex_str = hex_str + '0'     # Wird für späteren Zugriff über index benötigt
                 hex_list[idx] = hex_str
-
+            
+            # Im Folgenden werden die IDs decodiert. Weitere IDs können hier über eine if-Abfrage analog zur ID 0x101
+            # hinzugefügt werden. Der Inhalt der ID muss dabei allerdings bekannt sei.
             if '0x101' in can_msg:
-                msg_content = {
+                # Aufschlüsselung der CAN-Nachricht (Name : Position im Hex-String)
+                content_0x101 = {
                     'Ladestatus': [[-3, -1], [-5, -3]],
                     'Batteriestrom (mA)': [[-7, -5], [-9, -7]],
                     'Batterieleistung (W * 1/10)': [[-11, -9], [-13, -11]],
-                    'Batteriespannung (V)': [[-15, -13], [-17, -15]],
+                    'Batteriespannung (mV)': [[-15, -13], [-17, -15]],
                     }
-                for key in msg_content:
-                    index = msg_content.get(key)
+                # Die CAN-Nachricht wird hier mit Hilfe des zuvor angelegten Schlüssels dekodiert.
+                for key in content_0x101:
+                    index = content_0x101.get(key)
+                    # Zusammenbau mittels Schlüssel zu Hex-Zahl
                     can_msg_0x101 = ['0x' + hex_str[index[0][0]:index[0][1]] + hex_str[index[1][0]:index[1][1]] for hex_str in hex_list]
+                    # Konvertierung zu Integer und ablegen in Daten-Farme
                     can_msg_0x101 = [int(hex_str, 0) for hex_str in can_msg_0x101]
                     df[key] = can_msg_0x101
 
+            # Unkonvertierte CAN-Nachricht wird aus Daten-Frame gelöscht (Kann auch darin verbleiben, dazu einfach auskommentieren.)
             df.drop([can_msg], 1, inplace=True)
 
         return df
 
 
     def format_data(self, df):
-        pressure_rate = 78.0
-        radius = 0.35
+        '''Postprocess-Formatierung von einigen Daten. Einheiten sind zu berücksichtigen'''
+
+        pressure_rate = 78.0                    # Sensibilität der Drucksensoren
+        radius = 0.35                           # geschätzter Abrollradius, für Umrechnung Raddrehz. -> Geschw.
         circumference = 2 * np.pi * radius
-        total_flanks = 84
+        total_flanks = 84                       # Anzahl Flanken in Bremsscheibe vorne
 
-        df['Bremsdruck Vorne (bar)'] = df['Bremsdruck Vorne (bar)'] * pressure_rate * 3.3 / 4095
-        df['Bremsdruck Hinten (bar)'] = df['Bremsdruck Hinten (bar)'] * pressure_rate * 3.3 / 4095
-        df['Raddrehzahl Vorne (1/min)'] = 1e6 / (df['Raddrehzahl Vorne (1/min)'] * total_flanks)
-        df['Batteriespannung (V)'] = df['Batteriespannung (V)'] / 1000
-
+        df['Bremsdruck Vorne (bar)'] = df['Bremsdruck Vorne (bar)'] * pressure_rate * 3.3 / 4095        # Drucksensorsignal -> bar
+        df['Bremsdruck Hinten (bar)'] = df['Bremsdruck Hinten (bar)'] * pressure_rate * 3.3 / 4095      # Drucksensorsignal -> bar
+        df['Raddrehzahl Vorne (1/min)'] = 1e6 * 60 / (df['Raddrehzahl Vorne (1/min)'] * total_flanks)   # Hallsignal -> Umdrehungen/min
+        df['Geschw. - Rad (km/h)'] = df['Raddrehzahl Vorne (1/min)'] * circumference * 60 / 1000        # Umdrehungen/min -> km/h (Rad)
 
         return df
 
@@ -330,5 +445,5 @@ class MainApplication:
 
 if __name__ == '__main__':
     root = tk.Tk()
-    MainApplication(root)
+    DataloggerGUI(root)
     root.mainloop()
