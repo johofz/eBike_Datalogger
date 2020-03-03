@@ -251,8 +251,10 @@ class DataloggerGUI:
         '''Ermöglicht die Verbindung zum Datenlogger, wenn dieser zuvor mit der Bluetooth-Schnittstelle
         des PCs verbunden wurde. Das Suchen nach verfügbaren Ports kann ein paar Sekunden in Anspruch nehmen.'''
 
+        # Liste aller verfügbaren COM-Ports:
         self.available_ports = [comport.device for comport in list_com_ports.comports()]
 
+        # Popup mit Auswahlmöglichkeiten
         dialog = tk.Toplevel(self.parent)
         dialog.resizable(0, 0)
 
