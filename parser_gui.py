@@ -278,7 +278,7 @@ class DataloggerGUI:
     def open_dokumentation(self):
         '''Öffnet Dokumentation'''
 
-        doc_path = str(self.current_path) + '/static/test.pdf'
+        doc_path = str(self.current_path) + '/static/docs.pdf'
         webbrowser.open_new(doc_path)
 
 
