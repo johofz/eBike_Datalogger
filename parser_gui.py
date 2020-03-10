@@ -7,6 +7,10 @@ from tkinter import messagebox
 import numpy as np
 import pandas as pd
 import os
+import webbrowser
+import pathlib
+
+
 
 import serial
 import serial.tools.list_ports as list_com_ports
@@ -25,11 +29,11 @@ class DataloggerGUI:
     def __init__(self, parent):
         self.parent = parent
 
-        _bgcolor = '#d9d9d9'  # X11 color: 'gray85'
-        _fgcolor = '#000000'  # X11 color: 'black'
-        _compcolor = '#d9d9d9' # X11 color: 'gray85'
-        _ana1color = '#d9d9d9' # X11 color: 'gray85'
-        _ana2color = '#ececec' # Closest X11 color: 'gray92'
+        self._bgcolor = '#d9d9d9'  # X11 color: 'gray85'
+        self._fgcolor = '#000000'  # X11 color: 'black'
+        self._compcolor = '#d9d9d9' # X11 color: 'gray85'
+        self._ana1color = '#d9d9d9' # X11 color: 'gray85'
+        self._ana2color = '#ececec' # Closest X11 color: 'gray92'
 
         # Styles aktivieren durch ein-/auskommentieren
 
@@ -50,8 +54,9 @@ class DataloggerGUI:
 
         # Im Folgenden wird der Datentyp für die Konvertierung festgelegt. Dieser wird aus der datenstrultur.csv gebildet und MUSS mit 
         # der Datenstruktur des ESP32 identisch sein.
-        self.dt = self.get_data_type()
-
+        self.current_path = pathlib.Path(__file__).parent.absolute()
+        self.current_dt = 'static/datenstruktur.csv'
+        self.get_data_type()
         self.data = pd.DataFrame([])
 
         # Folgede Liste legt die Startansicht fest. (Kann nach Bedarf geändert werden, die Strings müssen dabei übereinstimmen.)
@@ -64,10 +69,36 @@ class DataloggerGUI:
         self.parent.resizable(1, 1)
         self.parent.title("Parser GUI")
         tk.Tk.iconbitmap(self.parent, default='static/logo.ico') # Für anderes Logo die logo.ico Datei ersetzen. (muss ICO sein)
-        self.parent.configure(background=_bgcolor)
+        self.parent.configure(background=self._bgcolor)
 
         # Der Folgende Teil legt das Erscheinungsbild des GUI fest. Änderungen sind nicht empfohlen.
         # Wenn doch eine neue Funktion hinzukommen soll, sollte diese bestenfalls über ein Kaskardenmenü implementiert werden.
+
+        ###################################################
+        ################## Dropdownmenü ##################
+        ###################################################
+        
+        self.menubar = tk.Menu(self.parent)
+
+        self.file_m = tk.Menu(self.menubar, tearoff=0)
+        self.file_m.add_command(label="Import CSV", command=lambda: self.load_csv())
+        self.file_m.add_command(label="Import BIN", command=lambda: self.load_bin(repair=False))
+        self.file_m.add_command(label="BIN reparieren", command=lambda: self.load_bin(repair=True))
+        self.file_m.add_command(state='disabled', label="Export CSV", command=lambda: self.save_csv())
+        self.file_m.add_separator()
+        self.file_m.add_command(label="Exit", command=root.quit)
+        self.menubar.add_cascade(label="File", menu=self.file_m)
+
+        self.settings_m = tk.Menu(self.menubar, tearoff=0)
+        self.settings_m.add_command(label="Datenstruktur auswählen", command=lambda: self.select_dt())
+        self.settings_m.add_command(label="Optionen", command=lambda: self.show_options())
+        self.menubar.add_cascade(label="Einstellungen", menu=self.settings_m)
+
+        self.help_m = tk.Menu(self.menubar, tearoff=0)
+        self.help_m.add_command(label="Dokumentation", command=lambda: self.open_dokumentation())
+        self.menubar.add_cascade(label="Hilfe", menu=self.help_m)
+
+        self.parent.config(menu=self.menubar)
 
         ###################################################
         ################# Plot - Optionen #################
@@ -75,7 +106,7 @@ class DataloggerGUI:
 
         self.plot_options = tk.LabelFrame(self.parent)
         self.plot_options.place(relx=0.01, rely=0.01, relheight=0.975, relwidth=0.2)
-        self.plot_options.configure(relief='groove', text='Plot Optionen', background=_bgcolor)
+        self.plot_options.configure(relief='groove', text='Plot Optionen', background=self._bgcolor)
 
         #################################################
         ################# Konvertierung #################
@@ -83,7 +114,7 @@ class DataloggerGUI:
 
         self.conversion = tk.LabelFrame(self.parent)
         self.conversion.place(relx=0.25, rely=0.01, relheight=0.15, relwidth=0.35)
-        self.conversion.configure(relief='groove', text='Konvertieren', background=_bgcolor)
+        self.conversion.configure(relief='groove', text='Konvertieren', background=self._bgcolor)
 
         self.load_csv_button = ttk.Button(self.conversion)
         self.load_csv_button.place(relx=0.01, rely=0.025)
@@ -107,7 +138,7 @@ class DataloggerGUI:
 
         self.live_logging = tk.LabelFrame(self.parent)
         self.live_logging.place(relx=0.625, rely=0.01, relheight=0.15, relwidth=0.365)
-        self.live_logging.configure(relief='groove', text='Live-Aufzeichnung', background=_bgcolor)
+        self.live_logging.configure(relief='groove', text='Live-Aufzeichnung', background=self._bgcolor)
 
         self.start_button = ttk.Button(self.live_logging)
         self.start_button.place(relx=0.01, rely=0.025)
@@ -131,7 +162,7 @@ class DataloggerGUI:
 
         self.graph_frame = tk.Frame(self.parent)
         self.graph_frame.place(relx=0.15, rely=0.075, relheight=0.91, relwidth=0.84)
-        self.graph_frame.configure(relief='groove', borderwidth="2", background=_bgcolor)
+        self.graph_frame.configure(relief='groove', borderwidth="2", background=self._bgcolor)
 
         self.canvas = FigureCanvasTkAgg(self.fig, self.graph_frame)
         self.canvas.draw()
@@ -146,18 +177,19 @@ class DataloggerGUI:
     # Ablauf der App. Hier nur Änderungen an den vorgesehenen Stellen vornehmen! (Siehe Dokumentation)
     # Bei Fragen gerne eine Mail an johannes.hoefler@outlook.com
 
+
     def get_data_type(self):
         '''Liest die vorgegebene Datenstruktur ein. Bei Änderungen müssen diese in der Excel-Liste analog übernommen werden.'''
 
         dtype_map = {
             'float64'   : np.float64,
             'float32'   : np.float32,
-            'uint64'    : np.uint64,
+            'uint64'       : np.uint64,
             'uint32'    : np.uint32,
             'uint16'    : np.uint16,
             'uint8'     : np.uint8,
         }
-        csv = pd.read_csv('static/datenstruktur.csv', sep=';', encoding = 'ISO-8859-1')
+        csv = pd.read_csv(self.current_dt, sep=';', encoding = 'ISO-8859-1')
         
         data_types = []
         for _, row in csv.iterrows():
@@ -166,8 +198,88 @@ class DataloggerGUI:
             data_types.append((name, dtype))
         
         dt = np.dtype(data_types, align=True)
+        self.dt = dt
+    
 
-        return dt
+    def select_dt(self):
+        '''Ermöglicht die Auswahl verschiedener zuvor angelegter Datenstrukturen'''
+
+        csv_file_types = (('csv Dateien', '*.csv'), ('alle Dateien', '*.*'))
+        dt_path = askopenfilename(filetypes=csv_file_types, initialdir='static/')
+        if dt_path:
+            self.current_dt = dt_path
+            self.get_data_type()
+
+
+    def show_options(self):
+        '''Öffnet Optionen-Fenster'''
+
+        option_window = tk.Toplevel(self.parent)
+        option_window.resizable(0, 0)
+
+        settings = {}
+
+        label_frame = tk.LabelFrame(option_window)
+        label_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
+        label_frame.configure(relief='groove', text='Einstellungen') 
+
+        setting1_text = ttk.Label(label_frame, text='Datenpunkte Live-Logging', anchor='w')
+        setting1_text.grid(row=0, column=0, sticky='w', padx=10, pady=5)
+        setting1_content = tk.StringVar()
+        setting1_content.set(str(self.xcount))
+        setting1_entry = ttk.Entry(label_frame, width=4, justify='right', textvariable=setting1_content)
+        settings['1'] = setting1_content
+        setting1_entry.grid(row=0, column=1, sticky='nsew', padx=10, pady=5)
+
+        setting2_text = ttk.Label(label_frame, text='Refresh-Rate Live-Logging', anchor='w')
+        setting2_text.grid(row=1, column=0, sticky='w', padx=10, pady=5)
+        setting2_content = tk.StringVar()
+        setting2_content.set(str(self.interval))
+        setting2_entry = ttk.Entry(label_frame, width=4, justify='right', textvariable=setting2_content)
+        settings['2'] = setting2_content
+        setting2_entry.grid(row=1, column=1, sticky='nsew', padx=10, pady=5)
+
+        button_frame = tk.Frame(option_window)
+        button_frame.grid(row=2, column=0, sticky='nsew')
+        confirm_Button = ttk.Button(button_frame, text='Bestätigen', command=lambda: self.validate_options(option_window, settings))
+        confirm_Button.grid(row=0, column=0, sticky='nsew', padx=15, pady=5)
+        cancle_Button = ttk.Button(button_frame, text='Abbrechen', command=lambda: option_window.destroy())
+        cancle_Button.grid(row=0, column=1, sticky='nsew', padx=5, pady=5)
+    
+
+    def validate_options(self, parent, settings_list):
+        try:
+            setting1 = int(settings_list['1'].get())
+            if setting1 >= 1 and setting1 <= 999999:
+                self.xcount = setting1
+                parent.destroy()
+            else:
+                raise ValueError
+        except ValueError:
+            messagebox.showinfo('Achtung!', 'Bitte Wert von 1 bis 999999 eingeben')
+            parent.attributes("-topmost", True)
+            parent.attributes("-topmost", False)
+
+        try:
+            setting2 = int(settings_list['2'].get())
+            if setting2 >= 50 and setting2 <= 10000:
+                self.interval = setting2
+                parent.destroy()
+            else:
+                raise ValueError
+        except ValueError:
+            messagebox.showinfo('Achtung!', 'Bitte Wert in ms von 50 bis 10000 eingeben')
+            parent.attributes("-topmost", True)
+            parent.attributes("-topmost", False)
+
+        
+
+
+    def open_dokumentation(self):
+        '''Öffnet Dokumentation'''
+
+        doc_path = str(self.current_path) + '/static/test.pdf'
+        webbrowser.open_new(doc_path)
 
 
     def load_csv(self):
@@ -182,8 +294,8 @@ class DataloggerGUI:
                 self.data.set_index(['Zeitstempel'], 1, inplace=True)
                 [self.data.drop([col], 1, inplace=True) for col in list(self.data) if 'Unnamed' in col]
 
-                self.updateOptions(self.data)
-                self.updateGraph(self.data)
+                self.update_options(self.data)
+                self.update_graph(self.data)
                 self.save_csv_button.configure(state='disabled')
             else: messagebox.showinfo('Achtung!', 'Dateiendung muss ".csv" sein!')
 
@@ -207,10 +319,11 @@ class DataloggerGUI:
                 df = self.convert_can_msg(df)
                 self.data = self.format_data(df)
 
-                self.updateOptions(self.data)
-                self.updateGraph(self.data)
+                self.update_options(self.data)
+                self.update_graph(self.data)
 
                 self.save_csv_button.configure(state='enabled')
+                self.file_m.entryconfig(2, state='active')
             else: messagebox.showinfo('Achtung!', 'Dateiendung muss ".bin" oder ".BIN" sein!')
 
     
@@ -218,14 +331,11 @@ class DataloggerGUI:
         '''Ermöglicht die Reparatur von beschädigten BIN-Dateien. Plausibilisierung anhand des Zeitstempels'''
 
         broken_rows = []
-
-        for i, row in df.iterrows():
-            try:
-                delta_t = row['Zeitstempel'][i+1] - row['Zeitstempel'][i]
+        for idx, row in df.iterrows():
+            if idx < len(df) - 1:
+                delta_t = df['Zeitstempel'][idx+1] - df['Zeitstempel'][idx]
                 if delta_t > 500 or delta_t < 0:
-                    broken_rows.append(i)
-            except IndexError:
-                pass
+                    broken_rows.append(idx)
 
         if broken_rows:
             df.drop(df.index[broken_rows], inplace=True)
@@ -347,9 +457,9 @@ class DataloggerGUI:
                 self.live_data = self.live_data.append(df)
             else:
                 self.live_data = df
-                self.updateOptions(self.live_data)
+                self.update_options(self.live_data)
 
-            self.updateGraph(self.live_data.tail(self.xcount))
+            self.update_graph(self.live_data.tail(self.xcount))
 
         self.after_process = self.parent.after(ms=self.interval, func=lambda: self.read_serial())
 
@@ -367,7 +477,6 @@ class DataloggerGUI:
 
         for can_msg in can_msg_list:
             hex_list = [hex(val) for val in df[can_msg]] # Konvertieren aller Einträge in Hex-Strings
-            [print(hex_list[i]) for i in range(10)]
             for idx, hex_str in enumerate(hex_list):
                 # Hex-Strings einheitlich auffüllen
                 while len(hex_str) < can_msg_length:
@@ -394,7 +503,8 @@ class DataloggerGUI:
                     can_msg_0x101 = [int(hex_str, 0) for hex_str in can_msg_0x101]
                     df[key] = can_msg_0x101
 
-            # Unkonvertierte CAN-Nachricht wird aus Daten-Frame gelöscht (Kann auch darin verbleiben, dazu einfach auskommentieren.)
+            # Unkonvertierte CAN-Nachricht wird aus Daten-Frame gelöscht.
+            # Für Debugging der Hardware kann diese auch ausgegeben werden, dazu einfach auskommentieren.
             df.drop([can_msg], 1, inplace=True)
 
         return df
@@ -416,24 +526,24 @@ class DataloggerGUI:
         return df
 
 
-    def updateOptions(self, data_list):
-        self.show_columns = {name: tk.BooleanVar() for name in list(data_list)}
+    def update_options(self, df):
+        self.show_columns = {name: tk.BooleanVar() for name in list(df)}
         [self.show_columns[key].set(1) if key in self.default_columns
             else self.show_columns[key].set(0) for key in self.show_columns]
 
         for i, key in enumerate(self.show_columns):
             check_box = tk.Checkbutton(self.plot_options)
             check_box.configure(text=key, variable=self.show_columns[key], background='#d9d9d9')
-            check_box.configure(command=lambda: self.updateGraph(data_list))
+            check_box.configure(command=lambda: self.update_graph(df))
             check_box.grid(row=i, column=0, sticky='w', padx=5, pady=1)
 
 
-    def updateGraph(self, data_type):
+    def update_graph(self, df):
         self.a.clear()
 
         show_this = [key for key in self.show_columns if self.show_columns[key].get() == 1]
         if show_this:
-            self.a.plot(data_type.index, data_type[show_this])
+            self.a.plot(df.index, df[show_this])
         try:
             self.a.set_title(self.current_file)
         except AttributeError:
