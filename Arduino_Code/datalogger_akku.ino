@@ -21,7 +21,7 @@ const int sdChipSelect = 32;        // SD SPI Chip-Select
 const int blueLED = 4;              // Blaue LED
 const int greenLED = 0;             // Grüne LED
 const int yellowLED = 2;            // Gelbe LED
-const int wakeUpPin = 13;             // Wake-Up-Pin
+const int wakeUpPin = ;             // Wake-Up-Pin
 
 
 
@@ -135,8 +135,8 @@ bool buffTwoFull = 0;
 
 // Globale Variablen für das File-Management der SD-Karte.
 File logFile;
-char currLogFile[11];
-char currLogFolder[13];
+char currLogFile[12];
+char currLogFolder[14];
 char currLogPath[25];
 
 // Anlegen einer Instanz des BluetoothSerial Objekts für die Live-Kommunikation mit dem

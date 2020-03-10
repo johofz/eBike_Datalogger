@@ -103,7 +103,8 @@ struct canDataStruct_t {
     byte            canId0x101[8];  //  8 byte
 } canData;                          //  8 byte
 
-// Das folgende Struct wird in der  
+// Das folgende Struct wird in der Haupt-ISR mit den Echtzeitmesswerten befüllt und anschließend in Puffer geschrieben.
+// Diese werden dann vom main-loop auf die SD-Karte geschrieben.
 
 struct logDataStruct_t {
     gpsDataStruct_t gpsLogData;     // 32 byte
@@ -365,26 +366,33 @@ void createNewLogFile() {
 
     // Hier wird aus einem gültigen GPS-Zeitstempel der Ordner und der Dateiname für die log-Datei generiert.
     } else {
-        String gpsStrYear = (String) gps.date.year();
-        String gpsStrMonth = (String) gps.date.month();
-        String gpsStrDay = (String) gps.date.day();
-        String gpsStrHour = (String) gps.time.hour();
-        String gpsStrMin = (String) gps.time.minute();
-        String gpsStrSec = (String) gps.time.second();
+        char gpsYearChar[4];
+        itoa(gps.date.year(), gpsYearChar);
+        char gpsMonthChar[2];
+        itoa(gps.date.month(), gpsMonthChar);
+        char gpsDayChar[2];
+        itoa(gps.date.day(), gpsDayChar);
+        
+        char gpsHourChar[2];
+        itoa(gps.time.hour(), gpsHourChar);
+        char gpsMinChar[2];
+        itoa(gps.time.minute(), gpsMinChar);
+        char gpsSecChar[2];
+        itoa(gps.time.second(), gpsSecChar);
     
-        if (gpsStrMonth.length() < 2) {
+        if (gpsMonthChar.length() < 2) {
             gpsStrMonth = '0' + gpsStrMonth;
         }
-        if (gpsStrDay.length() < 2) {
+        if (gpsDayChar.length() < 2) {
             gpsStrDay = '0' + gpsStrDay;
         }
-        if (gpsStrHour.length() < 2) {
+        if (gpsHourChar.length() < 2) {
             gpsStrHour = '0' + gpsStrHour;
         }
-        if (gpsStrMin.length() < 2) {
+        if (gpsMinChar.length() < 2) {
             gpsStrMin = '0' + gpsStrMin;
         }
-        if (gpsStrSec.length() < 2) {
+        if (gpsSecChar.length() < 2) {
             gpsStrSec = '0' + gpsStrSec;
         }
     
@@ -394,16 +402,11 @@ void createNewLogFile() {
         
         // Code etwas ausschweifend. Kann auch eleganter gelößt werden...
         currLogFolder[0] = '/';
-        currLogFolder[1] = gpsStrYear[0];
-        currLogFolder[2] = gpsStrYear[1];
-        currLogFolder[3] = gpsStrYear[2];
-        currLogFolder[4] = gpsStrYear[3];
+        memcpy((byte *) &currLogFolder[1], (byte *) &gpsYearChar, sizeof(gpsYearChar));
         currLogFolder[5] = '_';
-        currLogFolder[6] = gpsStrMonth[0];
-        currLogFolder[7] = gpsStrMonth[1];
+        memcpy((byte *) &currLogFolder[6], (byte *) &gpsMonthChar, sizeof(gpsMonthChar));
         currLogFolder[8] = '_';
-        currLogFolder[9] = gpsStrDay[0];
-        currLogFolder[10] = gpsStrDay[1];
+        memcpy((byte *) &currLogFolder[9], (byte *) &gpsDayChar, sizeof(gpsDayChar));
         Serial.print("Foldername: ");Serial.println(currLogFolder);
         
         createDir(SD, currLogFolder);
@@ -483,16 +486,15 @@ void getGpsData() {
 
 // Temperatur-Werte werden vom Thermomodul abgerufen und im tmpData-Struct abgelegt.
 void getTmpData() {
-
     double c = thermocoupleDisc.readCelsius();
-    if (isnan(c)){
+    if (isnan(c) || c > 500) {
         tmpData.tmpFrontDisc = 0.0;
     } else {
         tmpData.tmpFrontDisc = c;
     }
     
     c = thermocoupleLining.readCelsius();
-    if (isnan(c)){
+    if (isnan(c) || c > 500) {
         tmpData.tmpFrontLining = 0.0;
     } else {
         tmpData.tmpFrontLining = c;
